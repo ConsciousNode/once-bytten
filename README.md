@@ -10,6 +10,7 @@
 
 **Byte-Level File Security Scanner**
 
+[![Version](https://img.shields.io/badge/version-1.0.1-CC1122?style=flat-square)](#changelog)
 [![MIT License](https://img.shields.io/badge/license-MIT-CC1122?style=flat-square)](LICENSE)
 [![Xinu Compliant](https://img.shields.io/badge/xinu-compliant-880011?style=flat-square)](https://consciousnode.github.io)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-222222?style=flat-square)](#)
@@ -132,6 +133,15 @@ The suffix automaton (SAM) is the minimal deterministic finite automaton that ac
 
 High Shannon entropy + low ROSA compression ratio = consistent with encrypted or truly random data.  
 High Shannon entropy + high ROSA compression ratio = structured pattern disguised as noise (rare — flag for investigation).
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for full version history.
+
+**v1.0.1** — XSS hardening (file-derived content escaped at parse + render), PE parser bounds fixes, entropy canvas downsampling for large files.  
+**v1.0.0** — Initial release.
 
 ---
 

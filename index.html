@@ -667,6 +667,15 @@ const STR_PATTERNS = [
 // UTILITIES
 // ═══════════════════════════════════════════════════════════════
 
+function esc(str) {
+  return str.replace(/[&<>]/g, function(m) {
+    if (m === '&') return '&amp;';
+    if (m === '<') return '&lt;';
+    if (m === '>') return '&gt;';
+    return m;
+  });
+}
+
 function fmtBytes(n){
   if(n<1024)return n+' B';
   if(n<1048576)return (n/1024).toFixed(1)+' KB';
@@ -713,6 +722,7 @@ let hexCurrentPage=0;
 let hexTotalPages=0;
 let hexSearchBytes=null;
 let currentStrFilter='ALL';
+let currentScanId = 0;
 
 // ═══════════════════════════════════════════════════════════════
 // SCAN ENGINE
@@ -753,6 +763,13 @@ function setPhase(id,pct,label){
 }
 
 function runScan(file,bytes){
+  if (bytes.length === 0) {
+    alert('File is empty. Nothing to scan.');
+    resetScan();
+    return;
+  }
+  currentScanId++;
+  const myId = currentScanId;
   const ext=(file.name.split('.').pop()||'').toLowerCase();
   const data={
     file:{name:file.name,size:file.size,ext,type:file.type,lastModified:new Date(file.lastModified).toISOString()},
@@ -763,6 +780,7 @@ function runScan(file,bytes){
   // PHASE: MAGIC
   setPhase('magic',20,'Scanning magic bytes...');
   setTimeout(()=>{
+    if (myId !== currentScanId) return;
     data.magic=scanMagic(bytes,ext);
     data.threat=Math.max(data.threat,...data.magic.matches.map(m=>m.risk));
     if(data.magic.mismatch){data.threat=Math.max(data.threat,3);data.findings.push({level:'crit',msg:'File type mismatch: extension .'+ext+' but detected as '+data.magic.detectedType})}
@@ -773,6 +791,7 @@ function runScan(file,bytes){
     // PHASE: ENTROPY
     setPhase('entropy',40,'Computing entropy...');
     setTimeout(()=>{
+      if (myId !== currentScanId) return;
       data.entropy=scanEntropy(bytes);
       const avgH=data.entropy.avg;
       if(avgH>7.2){data.threat=Math.max(data.threat,2);data.findings.push({level:'warn',msg:'Very high average entropy ('+avgH.toFixed(2)+') — may indicate encryption or packing'})}
@@ -782,6 +801,7 @@ function runScan(file,bytes){
       // PHASE: STRINGS
       setPhase('strings',55,'Extracting strings...');
       setTimeout(()=>{
+        if (myId !== currentScanId) return;
         data.strings=extractStrings(bytes);
         const dangerStr=data.strings.filter(s=>s.risk>=3);
         if(dangerStr.length>0){data.threat=Math.max(data.threat,2);data.findings.push({level:'crit',msg:dangerStr.length+' high-risk string(s) found: '+dangerStr.slice(0,2).map(s=>s.val.slice(0,30)).join(', ')})}
@@ -795,12 +815,14 @@ function runScan(file,bytes){
         // PHASE: ROSA
         setPhase('rosa',68,'ROSA structural analysis...');
         setTimeout(()=>{
+          if (myId !== currentScanId) return;
           data.rosa=rosaAnalyze(bytes);
           if(data.rosa.compressionRatio<1.05&&data.entropy.avg>6)data.findings.push({level:'warn',msg:'Low structural repetition with high entropy — consistent with encrypted/random data'});
 
           // PHASE: STRUCTURE
           setPhase('struct',82,'Parsing structure...');
           setTimeout(()=>{
+            if (myId !== currentScanId) return;
             data.structure=parseStructure(bytes,data.magic);
             if(data.structure.pe&&data.structure.pe.suspicious.length>0){
               data.threat=Math.max(data.threat,2);
@@ -818,6 +840,7 @@ function runScan(file,bytes){
             // PHASE: HEX
             setPhase('hex',94,'Building hex view...');
             setTimeout(()=>{
+              if (myId !== currentScanId) return;
               data.hex={bytes:bytes};
               hexTotalPages=Math.ceil(bytes.length/(HEX_ROWS_PER_PAGE*16));
               hexCurrentPage=0;
@@ -829,7 +852,11 @@ function runScan(file,bytes){
               document.getElementById('prog-bar').style.width='100%';
               document.getElementById('prog-pct').textContent='100%';
               document.getElementById('prog-phase').textContent='Complete';
-              setTimeout(()=>renderResults(data),200);
+              setPhase('hex', 100, 'Complete');
+              setTimeout(() => {
+                if (myId !== currentScanId) return;
+                renderResults(data);
+              }, 200);
             },30);
           },30);
         },30);
@@ -944,7 +971,9 @@ function extractStrings(bytes){
       if(runStart===-1)runStart=i;
     } else {
       if(runStart!==-1&&(i-runStart)>=STRING_MIN_LEN){
-        const s=String.fromCharCode(...bytes.slice(runStart,i));
+        const slice = bytes.slice(runStart, i);
+        let s = '';
+        for (let j = 0; j < slice.length; j++) s += String.fromCharCode(slice[j]);
         // Scan for patterns
         for(const pat of STR_PATTERNS){
           pat.re.lastIndex=0;
@@ -973,6 +1002,9 @@ function extractStrings(bytes){
 // ═══════════════════════════════════════════════════════════════
 
 function rosaAnalyze(bytes){
+  if (bytes.length < 256) {
+    return { samples: [], bigram: new Uint32Array(65536), bigramEntropy: 0, states: 0, compressionRatio: 1, density: 0, usedPositions: [] };
+  }
   // Sample up to 3 positions: start, middle, end
   const samples=[];
   const positions=[0,Math.floor(bytes.length/2),Math.max(0,bytes.length-ROSA_SAMPLE_SZ)];
@@ -1097,8 +1129,10 @@ function parsePE(bytes){
   try{
     if(bytes[0]!==0x4D||bytes[1]!==0x5A)return{error:'Not a valid PE'};
     const peOff=r32le(bytes,0x3C);
+    if (peOff + 4 > bytes.length) return {error: 'PE header offset out of range'};
     if(peOff+24>bytes.length)return{error:'PE offset out of range'};
     if(bytes[peOff]!==0x50||bytes[peOff+1]!==0x45)return{error:'PE signature not found'};
+    if (peOff + 24 > bytes.length) return {error: 'PE header truncated'};
 
     const machine=r16le(bytes,peOff+4);
     const numSections=r16le(bytes,peOff+6);
@@ -1121,9 +1155,11 @@ function parsePE(bytes){
     for(let i=0;i<Math.min(numSections,32);i++){
       const sOff=sectOff+i*40;
       if(sOff+40>bytes.length)break;
+      if (sectOff + (i+1)*40 > bytes.length) break;
       const nameBytes=bytes.slice(sOff,sOff+8);
-      let name='';
-      for(let j=0;j<8&&nameBytes[j]!==0;j++)name+=String.fromCharCode(nameBytes[j]);
+      let nameRaw='';
+      for(let j=0;j<8&&nameBytes[j]!==0;j++)nameRaw+=String.fromCharCode(nameBytes[j]);
+      const name=esc(nameRaw);
       const vsize=r32le(bytes,sOff+8);
       const rawSize=r32le(bytes,sOff+16);
       const rawOff=r32le(bytes,sOff+20);
@@ -1133,8 +1169,11 @@ function parsePE(bytes){
 
       // Compute section entropy
       let sEntropy=0;
-      if(rawOff>0&&rawSize>0&&rawOff+rawSize<=bytes.length)
-        sEntropy=shannonEntropy(bytes,rawOff,rawSize);
+      if (rawOff + rawSize > bytes.length) {
+        sEntropy = 0;
+      } else if (rawOff > 0 && rawSize > 0) {
+        sEntropy = shannonEntropy(bytes, rawOff, rawSize);
+      }
 
       if(sEntropy>7.2)suspicious.push('Section "'+name+'" has very high entropy ('+sEntropy.toFixed(2)+') — possible packed/encrypted code');
       if(sFlags.includes('Execute')&&sFlags.includes('Write'))suspicious.push('Section "'+name+'" is both writable and executable (W+X) — common in shellcode loaders');
@@ -1186,8 +1225,9 @@ function parseZIP(bytes){
       const fnLen=r16le(bytes,i+26);
       const extraLen=r16le(bytes,i+28);
       if(fnLen>0&&i+30+fnLen<=bytes.length){
-        let fname='';
-        for(let j=0;j<fnLen;j++)fname+=String.fromCharCode(bytes[i+30+j]);
+        let fnameRaw='';
+        for(let j=0;j<fnLen;j++)fnameRaw+=String.fromCharCode(bytes[i+30+j]);
+        const fname = esc(fnameRaw);
         const ext=fname.split('.').pop().toLowerCase();
         const isDangerous=['exe','dll','scr','bat','cmd','ps1','vbs','js','jar','sh','py','rb'].includes(ext);
         if(isDangerous)hasExecutable=true;
@@ -1303,13 +1343,28 @@ function renderMagic(d){
 function renderEntropy(d){
   const canvas=document.getElementById('entropy-canvas');
   const chunks=d.entropy.chunks;
-  const W=Math.max(chunks.length,1);
+  const MAX_BARS = 2000;
+  let displayChunks = chunks;
+  if (chunks.length > MAX_BARS) {
+    const step = chunks.length / MAX_BARS;
+    displayChunks = [];
+    for (let i = 0; i < MAX_BARS; i++) {
+      const start = Math.floor(i * step);
+      const end = Math.floor((i+1) * step);
+      let sum = 0;
+      for (let j = start; j < end; j++) sum += chunks[j];
+      displayChunks.push(sum / (end - start));
+    }
+  } else {
+    displayChunks = chunks.slice();
+  }
+  const W = Math.max(displayChunks.length, 1);
   canvas.width=W;canvas.height=1;
   canvas.style.height='60px';
   const ctx=canvas.getContext('2d');
   const img=ctx.createImageData(W,1);
-  for(let i=0;i<chunks.length;i++){
-    const[r,g,b]=entropyColor(chunks[i]);
+  for(let i=0;i<displayChunks.length;i++){
+    const[r,g,b]=entropyColor(displayChunks[i]);
     img.data[i*4]=r;img.data[i*4+1]=g;img.data[i*4+2]=b;img.data[i*4+3]=255;
   }
   ctx.putImageData(img,0,0);
@@ -1371,7 +1426,7 @@ function renderStringTable(cat){
     <tbody>${rows.slice(0,300).map(s=>`<tr>
       <td class="str-off">0x${s.offset.toString(16).toUpperCase()}</td>
       <td><span class="cat-pill cat-${s.cat}">${s.cat}</span></td>
-      <td class="str-val">${s.val.replace(/&/g,'&amp;').replace(/</g,'&lt;').slice(0,120)}</td>
+      <td class="str-val">${esc(s.val).slice(0,120)}</td>
     </tr>`).join('')}</tbody>
   </table>${rows.length>300?`<div style="color:var(--text3);font-size:10px;padding:8px">${rows.length-300} more strings not shown.</div>`:''}`;
 }
@@ -1400,7 +1455,7 @@ function renderStructure(d){
         </div>
         ${p.sections.length>0?`<div class="struct-section"><div class="struct-label">Sections</div>
           <table class="sig-table"><thead><tr><th>Name</th><th>Raw Size</th><th>Entropy</th><th>Flags</th></tr></thead>
-          <tbody>${p.sections.map(sec=>`<tr><td>${sec.name}</td><td>${fmtBytes(sec.rawSize)}</td><td style="color:${parseFloat(sec.sEntropy)>7.2?'var(--bite)':parseFloat(sec.sEntropy)>6?'var(--warn)':'var(--text2)'}">${sec.sEntropy}</td><td style="color:var(--text3);font-size:10px">${sec.flags}</td></tr>`).join('')}
+          <tbody>${p.sections.map(sec=>`<tr><td>${esc(sec.name)}</td><td>${fmtBytes(sec.rawSize)}</td><td style="color:${parseFloat(sec.sEntropy)>7.2?'var(--bite)':parseFloat(sec.sEntropy)>6?'var(--warn)':'var(--text2)'}">${sec.sEntropy}</td><td style="color:var(--text3);font-size:10px">${sec.flags}</td></tr>`).join('')}
           </tbody></table></div>`:''}
         ${p.suspicious.length>0?'<div class="struct-section">'+p.suspicious.map(w=>`<div class="mismatch-warn">⚠ ${w}</div>`).join('')+'</div>':''}
       </div></div>`;
@@ -1426,7 +1481,7 @@ function renderStructure(d){
       ${z.hasExecutable?'<div class="mismatch-warn">⚠ Archive contains executable file(s)</div>':''}
       <div class="zip-list">${z.entries.map(e=>`
         <div class="zip-entry">
-          <span class="zip-name" style="color:${e.dangerous?'var(--bite-bright)':'var(--text2)'}">${e.name.replace(/</g,'&lt;')}</span>
+          <span class="zip-name" style="color:${e.dangerous?'var(--bite-bright)':'var(--text2)'}">${esc(e.name)}</span>
           <span>${e.encrypted?'<span class="zip-flag">🔒 ENCRYPTED</span>':''}</span>
           <span class="zip-size">${fmtBytes(e.uncompSize)}</span>
         </div>`).join('')}
@@ -1443,7 +1498,7 @@ function renderStructure(d){
     if(p.hasEmbeddedFile)flags.push({l:'ℹ Contains embedded file',c:'var(--info-bright)'});
     if(!flags.length)flags.push({l:'✓ No active content detected in first 64KB',c:'var(--safe-bright)'});
     html+=`<div class="card"><div class="card-head">PDF Structure</div><div class="card-body">
-      <div class="kv-list"><div class="kv-key">Version</div><div class="kv-val">${p.version}</div></div>
+      <div class="kv-list"><div class="kv-key">Version</div><div class="kv-val">${esc(p.version)}</div></div>
       <div style="margin-top:10px">${flags.map(f=>`<div style="color:${f.c};font-size:11px;margin-bottom:4px">${f.l}</div>`).join('')}</div>
     </div></div>`;
   }
