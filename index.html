@@ -668,11 +668,14 @@ const STR_PATTERNS = [
 // ═══════════════════════════════════════════════════════════════
 
 function esc(str) {
-  return str.replace(/[&<>]/g, function(m) {
+  // 2026-10-11: also escapes quotes, and accepts non-strings — used for every
+  // file-derived value that reaches innerHTML (file names are attacker-chosen).
+  return String(str).replace(/[&<>"']/g, function(m) {
     if (m === '&') return '&amp;';
     if (m === '<') return '&lt;';
     if (m === '>') return '&gt;';
-    return m;
+    if (m === '"') return '&quot;';
+    return '&#39;';
   });
 }
 
@@ -1286,7 +1289,7 @@ function renderOverview(d){
   document.getElementById('ov-fileinfo').innerHTML=
     ['Name','Size','Type','Extension','Last Modified'].map((l,i)=>{
       const v=[d.file.name,fmtBytes(d.file.size),d.file.type||'(unknown)','.'+d.file.ext,d.file.lastModified.slice(0,19)+' UTC'][i];
-      return`<div class="stat-row"><span class="stat-label">${l}</span><span class="stat-val">${v}</span></div>`;
+      return`<div class="stat-row"><span class="stat-label">${l}</span><span class="stat-val">${esc(v)}</span></div>`;
     }).join('');
 
   const avgH=d.entropy.avg.toFixed(3);
@@ -1302,7 +1305,7 @@ function renderOverview(d){
   const fl={'safe':'finding-safe','info':'finding-info','warn':'finding-warn','crit':'finding-crit'};
   const fi={'safe':'✓','info':'ℹ','warn':'⚠','crit':'✗'};
   document.getElementById('ov-findings').innerHTML=d.findings.map(f=>
-    `<div class="finding ${fl[f.level]||'finding-info'}">${fi[f.level]||'·'} ${f.msg}</div>`).join('');
+    `<div class="finding ${fl[f.level]||'finding-info'}">${fi[f.level]||'·'} ${esc(f.msg)}</div>`).join('');
 }
 
 function renderMagic(d){
@@ -1336,7 +1339,7 @@ function renderMagic(d){
   // Mismatch warning
   const mm=document.getElementById('magic-mismatch');
   mm.innerHTML='';
-  if(m.mismatch)mm.innerHTML=`<div class="mismatch-warn">⚠ Extension mismatch: file has extension <strong>.${d.file.ext}</strong> but magic bytes identify it as <strong>${m.detectedType}</strong>. This is a common disguise technique.</div>`;
+  if(m.mismatch)mm.innerHTML=`<div class="mismatch-warn">⚠ Extension mismatch: file has extension <strong>.${esc(d.file.ext)}</strong> but magic bytes identify it as <strong>${m.detectedType}</strong>. This is a common disguise technique.</div>`;
   if(m.isPolyglot&&m.matches.length>1)mm.innerHTML+=`<div class="mismatch-warn" style="margin-top:6px">⚠ Polyglot file: multiple valid format signatures detected. File may be valid in multiple formats simultaneously.</div>`;
 }
 
@@ -1457,7 +1460,7 @@ function renderStructure(d){
           <table class="sig-table"><thead><tr><th>Name</th><th>Raw Size</th><th>Entropy</th><th>Flags</th></tr></thead>
           <tbody>${p.sections.map(sec=>`<tr><td>${esc(sec.name)}</td><td>${fmtBytes(sec.rawSize)}</td><td style="color:${parseFloat(sec.sEntropy)>7.2?'var(--bite)':parseFloat(sec.sEntropy)>6?'var(--warn)':'var(--text2)'}">${sec.sEntropy}</td><td style="color:var(--text3);font-size:10px">${sec.flags}</td></tr>`).join('')}
           </tbody></table></div>`:''}
-        ${p.suspicious.length>0?'<div class="struct-section">'+p.suspicious.map(w=>`<div class="mismatch-warn">⚠ ${w}</div>`).join('')+'</div>':''}
+        ${p.suspicious.length>0?'<div class="struct-section">'+p.suspicious.map(w=>`<div class="mismatch-warn">⚠ ${esc(w)}</div>`).join('')+'</div>':''}
       </div></div>`;
     }
   }

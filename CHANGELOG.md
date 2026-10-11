@@ -4,6 +4,10 @@ All notable changes to Once Bytten are documented here.
 
 ---
 
+## v1.0.2 — 2026-10-11 · Kehai Interim
+
+- **The vampire got bitten:** the file's own *name* and extension were written into the page unescaped, so a file named `<img src=x onerror=…>.txt` ran script inside the scanner. File name, extension, findings and PE warnings now go through `esc()`, which also escapes quotes and accepts non-strings. Verified in Chromium with a hostile file name; ZIP entry names were already escaped correctly.
+
 ## [1.0.1] — 2026-06-07
 
 ### Security
